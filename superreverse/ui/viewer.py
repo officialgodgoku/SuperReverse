@@ -251,6 +251,10 @@ class MapViewerWidget(QWidget):
         self.params_table.setHorizontalHeaderLabels([
             "Parameter Identifier", "Category", "Current Value", "Discovered In", "Tweak Impact & Instructions"
         ])
+        self.params_table.setWordWrap(True)
+        self.params_table.setShowGrid(True)
+        self.params_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.params_table.verticalHeader().setDefaultSectionSize(34)
         self.params_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.params_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.params_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -309,11 +313,11 @@ class MapViewerWidget(QWidget):
         # Tab 5: Raw Markdown Editor
         self.editor = QPlainTextEdit()
         self.editor.setFont(QFont("Consolas", 10))
-        self.tabs.addTab(self.editor, "📝 Raw Markdown")
+        self.tabs.addTab(self.editor, "📝 Markdown")
 
         # Tab 6: REA Environment Status
         self.tools_panel = QTextBrowser()
-        self.tabs.addTab(self.tools_panel, "🛠️ REA Environment")
+        self.tabs.addTab(self.tools_panel, "🛠️ REA Status")
 
         layout.addWidget(self.tabs, 1)
         self._refresh_tools_panel()
@@ -327,7 +331,10 @@ class MapViewerWidget(QWidget):
         self.editor.setPlainText(bundle.markdown_content)
         html_body = markdown.markdown(bundle.markdown_content, extensions=["tables", "fenced_code"])
         self.browser_map.setHtml(f"<!DOCTYPE html><html><head>{HTML_STYLE}</head><body>{html_body}</body></html>")
-        self.status_pill.setText(f"Generated: {bundle.out_file.name}")
+        fm = self.status_pill.fontMetrics()
+        elided = fm.elidedText(bundle.out_file.name, Qt.ElideMiddle, 220)
+        self.status_pill.setText(f"Generated: {elided}")
+        self.status_pill.setToolTip(str(bundle.out_file))
 
         # 1. Populate Parameters Table
         self._populate_parameters_table(bundle)
@@ -383,17 +390,22 @@ class MapViewerWidget(QWidget):
             item_name = QTableWidgetItem(name)
             item_name.setForeground(QColor("#00f0ff"))
             item_name.setFont(QFont("Consolas", 9, QFont.Bold))
+            item_name.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             item_cat = QTableWidgetItem(cat)
             item_cat.setForeground(QColor("#ff9cfb"))
+            item_cat.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             item_val = QTableWidgetItem(str(val))
             item_val.setFont(QFont("Consolas", 9))
+            item_val.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             item_loc = QTableWidgetItem(loc)
             item_loc.setForeground(QColor("#a0aec0"))
+            item_loc.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             item_impact = QTableWidgetItem(impact)
+            item_impact.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             self.params_table.setItem(row, 0, item_name)
             self.params_table.setItem(row, 1, item_cat)

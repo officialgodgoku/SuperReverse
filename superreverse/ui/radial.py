@@ -252,20 +252,30 @@ class RadialDialWidget(QWidget):
             hub_tint = QColor(70, 35, 105, 255)
         glass.paint_liquid_glass(p, hub_path, tint=hub_tint, rim=True, highlight=1.4 if self.hub_hovered else 1.0)
 
-        # Hub Text & Icon
+        # Precise multi-layer typography inside Central Hub (No HTML tags, no overflow)
+        # 1a. Lightning Glyph (Top)
+        p.setFont(QFont("-apple-system, Segoe UI", 13, QFont.Bold))
+        p.setPen(QColor(255, 190, 40) if self.hub_hovered else QColor(255, 220, 80))
+        p.drawText(QRectF(c.x() - 20, c.y() - 36, 40, 20), Qt.AlignCenter, "⚡")
+
+        # 1b. Brand Title (Center)
+        p.setFont(QFont("-apple-system, Segoe UI", 9, QFont.Bold))
         p.setPen(QColor(255, 255, 255))
-        p.setFont(QFont("-apple-system, Segoe UI", 10, QFont.Bold))
-        hub_rect = QRectF(c.x() - r_hub + 2, c.y() - r_hub + 2, (r_hub - 2) * 2, (r_hub - 2) * 2)
+        p.drawText(QRectF(c.x() - 46, c.y() - 17, 92, 28), Qt.AlignCenter, "Super\nReverse")
 
-        short_name = self.active_target_name
-        if len(short_name) > 16:
-            short_name = short_name[:14] + "…"
+        # 1c. Target File / Status Badge (Bottom)
+        p.setFont(QFont("-apple-system, Segoe UI", 7.5, QFont.DemiBold))
+        fm = p.fontMetrics()
+        raw_target = self.active_target_name
+        if raw_target in ("", "Drop Software Here"):
+            p.setPen(QColor(148, 163, 184))
+            display_text = "Drop Here"
+        else:
+            p.setPen(QColor(0, 240, 255))
+            # Ellipsize the middle so filenames like SuperDrag.apk never overflow
+            display_text = fm.elidedText(raw_target, Qt.ElideMiddle, int(2 * (r_hub - 10)))
 
-        p.drawText(
-            hub_rect,
-            Qt.AlignCenter | Qt.TextWordWrap,
-            f"⚡\nSuper\nReverse\n<font size='1' color='#88d8ff'>{short_name}</font>",
-        )
+        p.drawText(QRectF(c.x() - (r_hub - 8), c.y() + 15, 2 * (r_hub - 8), 16), Qt.AlignCenter | Qt.TextSingleLine, display_text)
 
         # 2. Petals
         for i, act in enumerate(self.actions):
@@ -302,8 +312,13 @@ class RadialDialWidget(QWidget):
             ty = c.y() - mid_r * math.sin(mid_ang)
 
             p.save()
-            p.setPen(QColor(255, 255, 255) if is_hover else QColor(220, 220, 230))
-            p.setFont(QFont("-apple-system, Segoe UI", 9, QFont.Bold if is_hover else QFont.Normal))
-            rect = QRectF(tx - 38, ty - 20, 76, 40)
-            p.drawText(rect, Qt.AlignCenter, f"{act.glyph}\n{act.label}")
+            # Draw Glyph
+            p.setFont(QFont("-apple-system, Segoe UI", 12))
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRectF(tx - 40, ty - 22, 80, 22), Qt.AlignCenter, act.glyph)
+
+            # Draw Label
+            p.setFont(QFont("-apple-system, Segoe UI", 8.5, QFont.Bold if (is_hover or is_press) else QFont.DemiBold))
+            p.setPen(QColor(255, 255, 255) if (is_hover or is_press) else QColor(203, 213, 225))
+            p.drawText(QRectF(tx - 40, ty + 1, 80, 18), Qt.AlignCenter, act.label)
             p.restore()

@@ -124,7 +124,7 @@ class MainWindow(QWidget):
         author_lbl.setObjectName("badge")
         title_bar.addWidget(author_lbl)
 
-        sub_lbl = QLabel("Autonomous Binary & Software AI Blueprint Mapper")
+        sub_lbl = QLabel("AI Architecture & Forensics Mapper")
         sub_lbl.setObjectName("subtitle")
         title_bar.addWidget(sub_lbl)
 
@@ -192,11 +192,13 @@ class MainWindow(QWidget):
         self.drop_label = QLabel("Drag & Drop Any Software Here")
         self.drop_label.setStyleSheet("font-size: 11pt; font-weight: 600; color: #ffffff;")
         self.drop_label.setAlignment(Qt.AlignCenter)
+        self.drop_label.setWordWrap(True)
         drop_layout.addWidget(self.drop_label)
 
         self.drop_hint = QLabel("Supports APK, EXE, DLL, ELF, ASAR, WASM, JAR, or Web URLs")
         self.drop_hint.setObjectName("subtitle")
         self.drop_hint.setAlignment(Qt.AlignCenter)
+        self.drop_hint.setWordWrap(True)
         drop_layout.addWidget(self.drop_hint)
 
         # URL Input Bar
@@ -236,6 +238,8 @@ class MainWindow(QWidget):
         self.status_lbl = QLabel("Drop software on any dial petal or click to analyze")
         self.status_lbl.setObjectName("subtitle")
         self.status_lbl.setAlignment(Qt.AlignCenter)
+        self.status_lbl.setWordWrap(True)
+        self.status_lbl.setStyleSheet("font-size: 8.5pt; color: #a0aec0; padding: 2px 6px;")
         left_layout.addWidget(self.status_lbl)
 
         self.splitter.addWidget(left_panel)
