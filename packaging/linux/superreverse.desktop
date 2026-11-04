@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=SuperReverse
+GenericName=Software Architecture Mapper
+Comment=Fluid Liquid-Glass Drag-and-Drop Reverse Engineering & AI Architecture Mapper
+Exec=superreverse %F
+Icon=superreverse
+Terminal=false
+Type=Application
+Categories=Development;Security;Debugger;Utility;
+MimeType=application/x-executable;application/x-sharedlib;application/vnd.android.package-archive;application/zip;
+Keywords=reverse;engineering;binary;decompiler;frida;apk;pe;ai;blueprint;
+StartupWMClass=SuperReverse

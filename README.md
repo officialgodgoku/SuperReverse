@@ -3,7 +3,7 @@
 <p align="center">
   <img src="docs/banner.png" alt="SuperReverse Banner" width="100%"><br>
   <b>Fluid 3D Liquid-Glass Drag-and-Drop Software & Website Architecture Mapper</b><br>
-  <i>Created by <b>Manish</b> (<a href="https://github.com/officialgodgoku">@officialgodgoku</a>)</i>
+  <i>Created with 💖 by <b>Manish</b> (<a href="https://github.com/officialgodgoku">@officialgodgoku</a>)</i>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 
 ## 🌟 Visual Showcase
 
-Drop any software, binary, package, or website URL onto SuperReverse to instantly throw out an **Autonomous AI Architecture Map (`<Target>_AI_MAP.md`)**:
+Drop any executable, APK, JavaScript package, or live website URL onto SuperReverse to instantly throw out an **Autonomous AI Architecture Map (`<Target>_AI_MAP.md`)**:
 
 <p align="center">
   <img src="docs/preview.png" alt="SuperReverse Visual Interface & AI Map Viewer" width="100%">
@@ -28,7 +28,7 @@ Drop any software, binary, package, or website URL onto SuperReverse to instantl
 Watch SuperReverse decompile, audit security mitigations, and synthesize a complete AI blueprint in real time:
 
 <p align="center">
-  <img src="docs/demo.gif" alt="SuperReverse Dynamic Analysis Flow" width="80%">
+  <img src="docs/demo.gif" alt="SuperReverse Dynamic Analysis Flow" width="85%">
 </p>
 
 ---
@@ -39,7 +39,7 @@ Watch SuperReverse decompile, audit security mitigations, and synthesize a compl
 - **Universal Multi-Platform Support**:
   - 🤖 **Android Packages**: `.apk`, `.aab`, `.xapk`, and unpacked trees
   - 🪟 **Windows Native & .NET**: `.exe`, `.dll`, `.sys`, `.ocx`
-  - 🌐 **Live Web Applications**: Any URL (`https://...`, `http://...`) or `.url` internet shortcuts
+  - 🌐 **Live Web Applications & URLs**: Any URL (`https://...`, `http://...`) or `.url` internet shortcuts
   - ⚡ **Electron & Node.js**: `.asar` archives, unpacked JavaScript applications
   - 🐧 **Linux**: ELF binaries, `.so` shared libraries
   - 🍎 **macOS / iOS**: Mach-O executables, universal fat binaries, `.dylib`
@@ -85,41 +85,58 @@ Each generated blueprint follows a standardized specification designed for AI ag
 
 ---
 
-## 📥 Installation & Download
+## 📥 Cross-Platform Installation & Download
 
-### 1. Download Standalone Software
-Download the latest executable from the [Releases](https://github.com/officialgodgoku/SuperReverse/releases) tab.
+### 🪟 Windows (Portable Single-File EXE)
+1. Download **`SuperReverse.exe`** from the [Releases](https://github.com/officialgodgoku/SuperReverse/releases/latest) page.
+2. Double-click to run! (No installation or runtime required).
+3. Or launch via Windows Run dialog: **`Win + R`** ➔ `superreverse`.
 
-### 2. Run from Source
+---
+
+### 🍎 macOS (Apple Silicon & Intel)
+Install with a single command in your Terminal:
 ```bash
-# Clone the repository
+curl -fsSL https://raw.githubusercontent.com/officialgodgoku/SuperReverse/main/install-mac.sh | bash
+```
+*Adds `superreverse` to your terminal and launches the fluid liquid-glass interface.*
+
+---
+
+### 🐧 Linux (Ubuntu, Debian, Fedora, Arch)
+Install with a single command:
+```bash
+curl -fsSL https://raw.githubusercontent.com/officialgodgoku/SuperReverse/main/install-linux.sh | bash
+```
+*Adds SuperReverse to your application menu and installs the `superreverse` CLI command.*
+
+---
+
+### 🐍 Run from Source (Any OS)
+```bash
 git clone https://github.com/officialgodgoku/SuperReverse.git
 cd SuperReverse
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Launch GUI
 python run.py
 ```
 
-### 3. Headless Command-Line Interface (CLI)
+### ⚡ Headless CLI Mode (for scripts and terminals)
 ```bash
 # Analyze any website URL:
-python run.py --cli https://example.com
+superreverse --cli https://example.com
 
 # Analyze an Android APK:
-python run.py --cli path/to/app.apk
+superreverse --cli app.apk
 
 # Analyze a Windows executable:
-python run.py --cli path/to/program.exe -o custom_map.md
+superreverse --cli program.exe -o custom_map.md
 ```
 
 ---
 
 ## ☕ Support & Sponsoring
 
-If SuperReverse saves you hours of reverse engineering or helps your AI workflows:
+If SuperReverse saves you hours of reverse engineering or powers your AI agents, consider buying me a coffee:
 
 <p align="center">
   <a href="https://buymeacoffee.com/officialgodgoku">
