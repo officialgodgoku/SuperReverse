@@ -5,22 +5,62 @@ import argparse
 import re
 import sys
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-from superreverse.analyzers.apk_engine import APKEngine
-from superreverse.analyzers.electron_engine import ElectronEngine
-from superreverse.analyzers.native_engine import NativeEngine
-from superreverse.analyzers.pe_engine import PEEngine
+from superreverse.analyzers.apk_engine import APKAnalysisResult, APKEngine
+from superreverse.analyzers.electron_engine import ElectronAnalysisResult, ElectronEngine
+from superreverse.analyzers.native_engine import NativeAnalysisResult, NativeEngine
+from superreverse.analyzers.pe_engine import PEAnalysisResult, PEEngine
 from superreverse.analyzers.rea_bridge import REABridge
-from superreverse.analyzers.strings_engine import StringsEngine
-from superreverse.analyzers.web_engine import WebEngine
+from superreverse.analyzers.strings_engine import StringIntelligence, StringsEngine
+from superreverse.analyzers.web_engine import WebAnalysisResult, WebEngine
 from superreverse.core.classifier import TargetClassifier, TargetKind
 from superreverse.core.generator import AIMapGenerator
 
 
-def analyze_target(target_path: Path | str, output_path: Optional[Path | str] = None) -> Tuple[Path, str]:
-    """Analyze target artifact or Web URL and write AI Software Architecture Map."""
+@dataclass
+class AnalysisBundle:
+    target_path: str
+    target_name: str
+    kind: TargetKind
+    out_file: Path
+    markdown_content: str
+    strings_intel: Optional[StringIntelligence] = None
+    apk_data: Optional[APKAnalysisResult] = None
+    pe_data: Optional[PEAnalysisResult] = None
+    electron_data: Optional[ElectronAnalysisResult] = None
+    native_data: Optional[NativeAnalysisResult] = None
+    web_data: Optional[WebAnalysisResult] = None
+
+    @property
+    def pe(self) -> Optional[PEAnalysisResult]:
+        return self.pe_data
+
+    @property
+    def apk(self) -> Optional[APKAnalysisResult]:
+        return self.apk_data
+
+    @property
+    def electron(self) -> Optional[ElectronAnalysisResult]:
+        return self.electron_data
+
+    @property
+    def native(self) -> Optional[NativeAnalysisResult]:
+        return self.native_data
+
+    @property
+    def web(self) -> Optional[WebAnalysisResult]:
+        return self.web_data
+
+    @property
+    def strings(self) -> Optional[StringIntelligence]:
+        return self.strings_intel
+
+
+def analyze_target_bundle(target_path: Path | str, output_path: Optional[Path | str] = None) -> AnalysisBundle:
+    """Analyze target artifact or Web URL and return complete AnalysisBundle."""
     target_str = str(target_path).strip()
     kind, description = TargetClassifier.classify(target_path)
 
@@ -48,6 +88,7 @@ def analyze_target(target_path: Path | str, output_path: Optional[Path | str] = 
         web_engine = WebEngine(actual_url)
         web_data = web_engine.analyze()
         domain_clean = re.sub(r"[^\w\.-]", "_", web_data.domain or "website")
+        target_name = web_data.domain or actual_url
         default_filename = f"{domain_clean}_AI_MAP.md"
 
         # Determine output location
@@ -61,6 +102,7 @@ def analyze_target(target_path: Path | str, output_path: Optional[Path | str] = 
         if not p.exists():
             raise FileNotFoundError(f"Target path does not exist: {p}")
 
+        target_name = p.name
         strings_intel = strings_engine.analyze(p)
 
         if kind == TargetKind.ANDROID_APK:
@@ -112,7 +154,25 @@ def analyze_target(target_path: Path | str, output_path: Optional[Path | str] = 
             f.write(markdown_content)
         out_file = fallback_file
 
-    return out_file, markdown_content
+    return AnalysisBundle(
+        target_path=target_str,
+        target_name=target_name,
+        kind=kind,
+        out_file=out_file,
+        markdown_content=markdown_content,
+        strings_intel=strings_intel,
+        apk_data=apk_data,
+        pe_data=pe_data,
+        electron_data=electron_data,
+        native_data=native_data,
+        web_data=web_data,
+    )
+
+
+def analyze_target(target_path: Path | str, output_path: Optional[Path | str] = None) -> Tuple[Path, str]:
+    """Analyze target artifact or Web URL and write AI Software Architecture Map."""
+    bundle = analyze_target_bundle(target_path, output_path)
+    return bundle.out_file, bundle.markdown_content
 
 
 def main(argv=None):

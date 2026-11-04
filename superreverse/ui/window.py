@@ -2,12 +2,20 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QThread, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QDragEnterEvent, QDropEvent, QPainter, QPainterPath
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDropEvent,
+    QPainter,
+    QPainterPath,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -22,7 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from superreverse.core.cli import analyze_target
+from superreverse.core.cli import AnalysisBundle, analyze_target_bundle
+from superreverse.core.unpacker import UnpackResult, Unpacker
 from superreverse.ui import glass
 from superreverse.ui.radial import RadialDialWidget
 from superreverse.ui.viewer import MapViewerWidget
@@ -30,7 +39,7 @@ from superreverse.ui.viewer import MapViewerWidget
 
 class AnalysisWorker(QThread):
     progress = Signal(str, int)
-    finished = Signal(str, str)  # markdown_path, content
+    finished_bundle = Signal(object)  # AnalysisBundle
     error = Signal(str)
 
     def __init__(self, target_path: str):
@@ -39,20 +48,36 @@ class AnalysisWorker(QThread):
 
     def run(self):
         try:
-            self.progress.emit("Classifying target artifact...", 20)
-            self.msleep(60)
+            self.progress.emit("Classifying target artifact...", 15)
+            self.msleep(50)
 
-            self.progress.emit("Extracting strings, APIs and indicators...", 45)
-            self.msleep(60)
+            self.progress.emit("Extracting strings, APIs, secrets & indicators...", 35)
+            self.msleep(50)
 
-            self.progress.emit("Running deep reverse engineering engines...", 70)
-            self.msleep(60)
+            self.progress.emit("Running deep binary & reverse engineering engines...", 65)
+            self.msleep(50)
 
-            self.progress.emit("Synthesizing AI Software Architecture Blueprint...", 90)
-            out_file, content = analyze_target(self.target_path)
+            self.progress.emit("Synthesizing AI Architecture Blueprint & Parameters...", 85)
+            bundle = analyze_target_bundle(self.target_path)
 
             self.progress.emit("Analysis Complete!", 100)
-            self.finished.emit(str(out_file), content)
+            self.finished_bundle.emit(bundle)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class UnpackWorker(QThread):
+    finished = Signal(object)  # UnpackResult
+    error = Signal(str)
+
+    def __init__(self, target_path: str):
+        super().__init__()
+        self.target_path = target_path
+
+    def run(self):
+        try:
+            res = Unpacker.unpack(self.target_path)
+            self.finished.emit(res)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -64,12 +89,16 @@ class MainWindow(QWidget):
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet(glass.QSS)
-        self.resize(1120, 720)
+        self.resize(1180, 750)
 
         self._drag_pos: Optional[QPoint] = None
         self.radius = 18
-        self.active_target: Optional[Path] = None
+        self.active_target: Optional[str] = None
+        self.last_bundle: Optional[AnalysisBundle] = None
+        self.pending_action: Optional[str] = None
+
         self.worker: Optional[AnalysisWorker] = None
+        self.unpack_worker: Optional[UnpackWorker] = None
 
         self.setAcceptDrops(True)
         self._init_ui()
@@ -84,7 +113,7 @@ class MainWindow(QWidget):
         title_bar.setSpacing(8)
 
         icon_label = QLabel("⚡")
-        icon_label.setStyleSheet("font-size: 14pt;")
+        icon_label.setStyleSheet("font-size: 15pt;")
         title_bar.addWidget(icon_label)
 
         title_lbl = QLabel("SuperReverse")
@@ -146,22 +175,22 @@ class MainWindow(QWidget):
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(4, 4, 8, 4)
-        left_layout.setSpacing(12)
+        left_layout.setSpacing(10)
 
         # Drop Zone Frame
         self.drop_frame = QFrame()
         self.drop_frame.setObjectName("dropZone")
         drop_layout = QVBoxLayout(self.drop_frame)
-        drop_layout.setContentsMargins(16, 20, 16, 20)
+        drop_layout.setContentsMargins(14, 14, 14, 14)
         drop_layout.setAlignment(Qt.AlignCenter)
 
         self.drop_icon = QLabel("📥")
-        self.drop_icon.setStyleSheet("font-size: 38pt;")
+        self.drop_icon.setStyleSheet("font-size: 32pt;")
         self.drop_icon.setAlignment(Qt.AlignCenter)
         drop_layout.addWidget(self.drop_icon)
 
         self.drop_label = QLabel("Drag & Drop Any Software Here")
-        self.drop_label.setStyleSheet("font-size: 12pt; font-weight: 600; color: #ffffff;")
+        self.drop_label.setStyleSheet("font-size: 11pt; font-weight: 600; color: #ffffff;")
         self.drop_label.setAlignment(Qt.AlignCenter)
         drop_layout.addWidget(self.drop_label)
 
@@ -192,24 +221,26 @@ class MainWindow(QWidget):
         # Radial Dial Action Hub
         self.radial_dial = RadialDialWidget(self, size=320)
         self.radial_dial.action_selected.connect(self._on_radial_action)
+        self.radial_dial.action_dropped.connect(self._on_radial_drop)
+        self.radial_dial.hub_clicked.connect(self._on_hub_clicked)
         left_layout.addWidget(self.radial_dial, alignment=Qt.AlignCenter)
 
         # Progress Section
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(12)
+        self.progress_bar.setFixedHeight(10)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.hide()
         left_layout.addWidget(self.progress_bar)
 
-        self.status_lbl = QLabel("")
+        self.status_lbl = QLabel("Drop software on any dial petal or click to analyze")
         self.status_lbl.setObjectName("subtitle")
         self.status_lbl.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(self.status_lbl)
 
         self.splitter.addWidget(left_panel)
 
-        # Right Panel: Interactive Map Viewer
+        # Right Panel: Interactive Multi-Tab Map Viewer
         self.viewer = MapViewerWidget()
         self.splitter.addWidget(self.viewer)
 
@@ -220,7 +251,9 @@ class MainWindow(QWidget):
 
         # Bottom Bar with SizeGrip and Credits
         bot_bar = QHBoxLayout()
-        credit_lbl = QLabel("Created with 💖 by <b>Manish</b> (<a href='https://github.com/officialgodgoku' style='color:#5ac8ff;'>@officialgodgoku</a>) • Free & Open Source")
+        credit_lbl = QLabel(
+            "Created with 💖 by <b>Manish</b> (<a href='https://github.com/officialgodgoku' style='color:#5ac8ff;'>@officialgodgoku</a>) • Free & Open Source"
+        )
         credit_lbl.setOpenExternalLinks(True)
         credit_lbl.setObjectName("subtitle")
         bot_bar.addWidget(credit_lbl)
@@ -234,7 +267,7 @@ class MainWindow(QWidget):
     def _on_url_submitted(self):
         url = self.url_input.text().strip()
         if url:
-            self.start_analysis(url)
+            self.start_analysis(url, action="ai_map")
 
     def _browse_file(self):
         target, _ = QFileDialog.getOpenFileName(
@@ -244,13 +277,15 @@ class MainWindow(QWidget):
             "All Supported (*.apk *.aab *.exe *.dll *.so *.asar *.jar *.wasm *.elf *.url);;Android APK (*.apk *.aab);;Windows Executable (*.exe *.dll);;Electron ASAR (*.asar);;Internet Shortcut (*.url);;All Files (*.*)",
         )
         if target:
-            self.start_analysis(target)
+            action = self.pending_action or "ai_map"
+            self.start_analysis(target, action=action)
 
-    def start_analysis(self, target_str: str):
+    def start_analysis(self, target_str: str, action: str = "ai_map"):
         target_str = target_str.strip()
         if not target_str:
             return
 
+        self.pending_action = action
         is_url = target_str.startswith(("http://", "https://", "www.")) or (
             "." in target_str and "/" not in target_str and "\\" not in target_str
         )
@@ -258,9 +293,10 @@ class MainWindow(QWidget):
         if not is_url:
             p = Path(target_str).resolve()
             if not p.exists():
+                self.status_lbl.setText(f"File not found: {p.name}")
                 return
             display_name = p.name
-            self.active_target = p
+            self.active_target = str(p)
         else:
             display_name = target_str
             self.active_target = target_str
@@ -270,11 +306,11 @@ class MainWindow(QWidget):
 
         self.progress_bar.show()
         self.progress_bar.setValue(10)
-        self.status_lbl.setText("Starting Autonomous Analysis Pipeline...")
+        self.status_lbl.setText("Scanning software at binary level...")
 
-        self.worker = AnalysisWorker(str(target_str))
+        self.worker = AnalysisWorker(self.active_target)
         self.worker.progress.connect(self._on_progress)
-        self.worker.finished.connect(self._on_finished)
+        self.worker.finished_bundle.connect(self._on_analysis_finished)
         self.worker.error.connect(self._on_error)
         self.worker.start()
 
@@ -282,10 +318,22 @@ class MainWindow(QWidget):
         self.status_lbl.setText(msg)
         self.progress_bar.setValue(val)
 
-    def _on_finished(self, out_file: str, content: str):
-        self.status_lbl.setText(f"✅ Generated: {Path(out_file).name}")
+    def _on_analysis_finished(self, bundle: AnalysisBundle):
+        self.last_bundle = bundle
+        self.status_lbl.setText(f"✅ Generated: {bundle.out_file.name}")
         self.progress_bar.setValue(100)
-        self.viewer.load_markdown(out_file, content)
+        self.viewer.load_bundle(bundle)
+
+        # Handle pending action
+        act = self.pending_action or "ai_map"
+        self.pending_action = None
+
+        if act == "unpack":
+            self._trigger_unpack()
+        elif act == "copy_prompt":
+            self.viewer._copy_for_ai()
+        else:
+            self.viewer.switch_to_tab(act)
 
     def _on_error(self, err_msg: str):
         self.status_lbl.setText(f"❌ Error: {err_msg}")
@@ -293,31 +341,70 @@ class MainWindow(QWidget):
 
     def _on_radial_action(self, action_id: str):
         if not self.active_target:
+            self.pending_action = action_id
             self._browse_file()
             return
 
+        if not self.last_bundle:
+            self.start_analysis(self.active_target, action=action_id)
+            return
+
         if action_id == "ai_map":
-            self.start_analysis(str(self.active_target))
+            self.viewer.switch_to_tab("ai_map")
+            self.status_lbl.setText("🗺️ AI Software Architecture Blueprint")
+        elif action_id == "security":
+            self.viewer.switch_to_tab("security")
+            self.status_lbl.setText("🛡️ Binary Security & Exploit Mitigations")
+        elif action_id == "decompile":
+            self.viewer.switch_to_tab("decompile")
+            self.status_lbl.setText("☕ Disassembly & Decompiled Sources")
+        elif action_id == "strings":
+            self.viewer.switch_to_tab("strings")
+            self.status_lbl.setText("🔍 Extracted Intelligence, URLs & Keys")
         elif action_id == "copy_prompt":
             self.viewer._copy_for_ai()
-        elif action_id == "security":
-            self.viewer.tabs.setCurrentIndex(0)
-        elif action_id == "strings":
-            self.viewer.tabs.setCurrentIndex(0)
-        elif action_id in ("unpack", "decompile"):
-            # Trigger JADX / APKTool if APK
-            from superreverse.analyzers.rea_bridge import REABridge
-            bridge = REABridge()
-            if self.active_target.suffix.lower() == ".apk":
-                out_dir = self.active_target.parent / f"{self.active_target.stem}_decompiled"
-                self.status_lbl.setText("Running decompilation...")
-                if action_id == "decompile":
-                    bridge.run_jadx_decompile(self.active_target, out_dir)
-                else:
-                    bridge.run_apktool_decode(self.active_target, out_dir)
-                self.status_lbl.setText(f"Decompiled to {out_dir.name}")
+            self.status_lbl.setText("📋 Copied Master AI Prompt Injection Card!")
+        elif action_id == "unpack":
+            self._trigger_unpack()
 
-    # Drag and Drop handlers
+    def _on_radial_drop(self, action_id: str, target_path: str):
+        self.start_analysis(target_path, action=action_id)
+
+    def _on_hub_clicked(self):
+        if self.active_target and self.last_bundle:
+            self.viewer.switch_to_tab("ai_map")
+            self.status_lbl.setText("🗺️ Viewing Master AI Architecture Map")
+        else:
+            self._browse_file()
+
+    def _trigger_unpack(self):
+        if not self.active_target:
+            self.pending_action = "unpack"
+            self._browse_file()
+            return
+
+        self.status_lbl.setText("📦 Unpacking artifact resources and assets...")
+        self.progress_bar.show()
+        self.progress_bar.setValue(50)
+
+        self.unpack_worker = UnpackWorker(self.active_target)
+        self.unpack_worker.finished.connect(self._on_unpack_finished)
+        self.unpack_worker.error.connect(self._on_error)
+        self.unpack_worker.start()
+
+    def _on_unpack_finished(self, res: UnpackResult):
+        self.progress_bar.setValue(100)
+        self.status_lbl.setText(f"✅ {res.message}")
+        # Reveal in Explorer
+        if res.output_dir.exists():
+            if sys.platform == "win32":
+                subprocess.run(["explorer", str(res.output_dir)])
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(res.output_dir)])
+            else:
+                subprocess.run(["xdg-open", str(res.output_dir)])
+
+    # Drag and Drop handlers on window frame
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls() or event.mimeData().hasText():
             event.acceptProposedAction()
@@ -334,24 +421,17 @@ class MainWindow(QWidget):
         self.drop_frame.setProperty("active", False)
         self.drop_frame.setStyle(self.drop_frame.style())
 
+        target = ""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if urls:
-                path = urls[0].toLocalFile()
-                if path:
-                    self.start_analysis(path)
-                    event.acceptProposedAction()
-                    return
-                elif urls[0].toString():
-                    self.start_analysis(urls[0].toString())
-                    event.acceptProposedAction()
-                    return
+                target = urls[0].toLocalFile() or urls[0].toString()
+        elif event.mimeData().hasText():
+            target = event.mimeData().text().strip()
 
-        if event.mimeData().hasText():
-            text = event.mimeData().text().strip()
-            if text:
-                self.start_analysis(text)
-                event.acceptProposedAction()
+        if target:
+            self.start_analysis(target, action="ai_map")
+            event.acceptProposedAction()
 
     # Frameless window dragging
     def mousePressEvent(self, event):

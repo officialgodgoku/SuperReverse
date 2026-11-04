@@ -4,7 +4,7 @@ Displays interactive petal slices for rapid action dispatch on dropped binaries:
 - 🗺️ Generate AI Map
 - 🛡️ Security Audit
 - 📦 Unpack Artifact
-- ☕ Decompile (JADX / ASAR)
+- ☕ Decompile (JADX / ASAR / Capstone)
 - 🔍 Extract Intelligence
 - 📋 Copy AI Prompt
 """
@@ -18,12 +18,17 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QCursor,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QFont,
     QPainter,
     QPainterPath,
     QPen,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QToolTip, QWidget
 
 from superreverse.ui import glass
 
@@ -43,9 +48,9 @@ class RadialAction:
 
 DEFAULT_ACTIONS = [
     RadialAction("ai_map", "AI Map", "🗺️", "Generate full AI Architecture Map (.md)"),
-    RadialAction("security", "Security", "🛡️", "Mitigations & vulnerability audit"),
-    RadialAction("unpack", "Unpack", "📦", "Extract resources, assets & manifest"),
-    RadialAction("decompile", "Decompile", "☕", "Run JADX / source recovery"),
+    RadialAction("security", "Security", "🛡️", "Mitigations, risks & security audit"),
+    RadialAction("unpack", "Unpack", "📦", "Extract resources, assets, manifest & files"),
+    RadialAction("decompile", "Decompile", "☕", "Run JADX / Capstone assembly viewer"),
     RadialAction("strings", "Strings", "🔍", "Extract URLs, IPs, keys & secrets"),
     RadialAction("copy_prompt", "AI Prompt", "📋", "Copy ready-to-use LLM context"),
 ]
@@ -70,60 +75,166 @@ def angles(n: int, i: int) -> tuple[float, float]:
 
 class RadialDialWidget(QWidget):
     action_selected = Signal(str)
+    action_dropped = Signal(str, str)  # action_id, target_path
+    hub_clicked = Signal()
 
     def __init__(self, parent=None, size: int = 340):
         super().__init__(parent)
         self.setFixedSize(size, size)
         self.actions = DEFAULT_ACTIONS
         self.hovered_index: int = -1
+        self.pressed_index: int = -1
+        self.hub_hovered: bool = False
+        self.hub_pressed: bool = False
         self.setMouseTracking(True)
+        self.setAcceptDrops(True)
         self.active_target_name: str = "Drop Software Here"
 
     def set_target(self, name: str):
         self.active_target_name = name
         self.update()
 
-    def mouseMoveEvent(self, event):
-        pos = event.position()
+    def _get_sector_at(self, pos: QPointF) -> int:
         c = QPointF(self.width() / 2, self.height() / 2)
         dx = pos.x() - c.x()
         dy = pos.y() - c.y()
         dist = math.hypot(dx, dy)
 
-        prev = self.hovered_index
-        if R_IN <= dist <= R_OUT:
-            # Calculate angle in degrees matching Qt arc convention
+        if R_IN <= dist <= R_OUT + 8:
             ang = math.degrees(math.atan2(-dy, dx))
             if ang < 0:
                 ang += 360
 
-            # Find matching sector
-            found = -1
             n = len(self.actions)
             for i in range(n):
                 a0, a1 = angles(n, i)
-                # Normalize
                 norm_a0 = a0 % 360
                 norm_a1 = a1 % 360
                 if norm_a0 < norm_a1:
                     if norm_a0 <= ang <= norm_a1:
-                        found = i
-                        break
+                        return i
                 else:
                     if ang >= norm_a0 or ang <= norm_a1:
-                        found = i
-                        break
-            self.hovered_index = found
-        else:
-            self.hovered_index = -1
+                        return i
+        return -1
 
-        if prev != self.hovered_index:
+    def mouseMoveEvent(self, event):
+        pos = event.position()
+        c = QPointF(self.width() / 2, self.height() / 2)
+        dist = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+
+        prev_hover = self.hovered_index
+        prev_hub = self.hub_hovered
+
+        if dist <= R_HUB:
+            self.hub_hovered = True
+            self.hovered_index = -1
+            self.setCursor(QCursor(Qt.PointingHandCursor))
+        else:
+            self.hub_hovered = False
+            self.hovered_index = self._get_sector_at(pos)
+            if self.hovered_index >= 0:
+                self.setCursor(QCursor(Qt.PointingHandCursor))
+                act = self.actions[self.hovered_index]
+                self.setToolTip(f"{act.glyph} {act.label}: {act.description}")
+            else:
+                self.setCursor(QCursor(Qt.ArrowCursor))
+                self.setToolTip("")
+
+        if prev_hover != self.hovered_index or prev_hub != self.hub_hovered:
             self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.hovered_index >= 0:
-            act = self.actions[self.hovered_index]
-            self.action_selected.emit(act.id)
+        if event.button() == Qt.LeftButton:
+            pos = event.position()
+            c = QPointF(self.width() / 2, self.height() / 2)
+            dist = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+            if dist <= R_HUB:
+                self.hub_pressed = True
+                self.pressed_index = -2
+            else:
+                self.pressed_index = self._get_sector_at(pos)
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.position()
+            c = QPointF(self.width() / 2, self.height() / 2)
+            dist = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+
+            if self.hub_pressed and dist <= R_HUB:
+                self.hub_clicked.emit()
+            elif self.pressed_index >= 0 and self.pressed_index == self._get_sector_at(pos):
+                act = self.actions[self.pressed_index]
+                self.action_selected.emit(act.id)
+
+            self.pressed_index = -1
+            self.hub_pressed = False
+            self.update()
+
+    def leaveEvent(self, event):
+        self.hovered_index = -1
+        self.pressed_index = -1
+        self.hub_hovered = False
+        self.hub_pressed = False
+        self.update()
+
+    # ================= Drag & Drop Integration =================
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+            self.hovered_index = self._get_sector_at(event.position())
+            self.update()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent):
+        pos = event.position()
+        c = QPointF(self.width() / 2, self.height() / 2)
+        dist = math.hypot(pos.x() - c.x(), pos.y() - c.y())
+
+        prev_hover = self.hovered_index
+        prev_hub = self.hub_hovered
+
+        if dist <= R_HUB:
+            self.hub_hovered = True
+            self.hovered_index = -1
+        else:
+            self.hub_hovered = False
+            self.hovered_index = self._get_sector_at(pos)
+
+        if prev_hover != self.hovered_index or prev_hub != self.hub_hovered:
+            self.update()
+
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent):
+        self.hovered_index = -1
+        self.hub_hovered = False
+        self.update()
+
+    def dropEvent(self, event: QDropEvent):
+        target_str = ""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls:
+                target_str = urls[0].toLocalFile() or urls[0].toString()
+        elif event.mimeData().hasText():
+            target_str = event.mimeData().text().strip()
+
+        if target_str:
+            if self.hovered_index >= 0:
+                act = self.actions[self.hovered_index]
+                action_id = act.id
+            else:
+                action_id = "ai_map"
+
+            self.action_dropped.emit(action_id, target_str)
+            event.acceptProposedAction()
+
+        self.hovered_index = -1
+        self.hub_hovered = False
+        self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -133,29 +244,58 @@ class RadialDialWidget(QWidget):
 
         # 1. Central Hub
         hub_path = QPainterPath()
-        hub_path.addEllipse(c, R_HUB, R_HUB)
-        glass.paint_liquid_glass(p, hub_path, tint=QColor(24, 20, 36, 230), rim=True)
+        r_hub = R_HUB + (2 if self.hub_hovered else 0) - (2 if self.hub_pressed else 0)
+        hub_path.addEllipse(c, r_hub, r_hub)
 
-        # Hub Text
+        hub_tint = QColor(48, 28, 70, 245) if self.hub_hovered else QColor(24, 20, 36, 230)
+        if self.hub_pressed:
+            hub_tint = QColor(70, 35, 105, 255)
+        glass.paint_liquid_glass(p, hub_path, tint=hub_tint, rim=True, highlight=1.4 if self.hub_hovered else 1.0)
+
+        # Hub Text & Icon
         p.setPen(QColor(255, 255, 255))
-        p.setFont(QFont("-apple-system, Segoe UI", 11, QFont.Bold))
-        hub_rect = QRectF(c.x() - R_HUB + 4, c.y() - R_HUB + 4, (R_HUB - 4) * 2, (R_HUB - 4) * 2)
-        p.drawText(hub_rect, Qt.AlignCenter | Qt.TextWordWrap, "⚡\nSuper\nReverse")
+        p.setFont(QFont("-apple-system, Segoe UI", 10, QFont.Bold))
+        hub_rect = QRectF(c.x() - r_hub + 2, c.y() - r_hub + 2, (r_hub - 2) * 2, (r_hub - 2) * 2)
+
+        short_name = self.active_target_name
+        if len(short_name) > 16:
+            short_name = short_name[:14] + "…"
+
+        p.drawText(
+            hub_rect,
+            Qt.AlignCenter | Qt.TextWordWrap,
+            f"⚡\nSuper\nReverse\n<font size='1' color='#88d8ff'>{short_name}</font>",
+        )
 
         # 2. Petals
         for i, act in enumerate(self.actions):
             a0, a1 = angles(n, i)
             is_hover = (i == self.hovered_index)
-            r_out = R_OUT + (6 if is_hover else 0)
+            is_press = (i == self.pressed_index)
+
+            r_out = R_OUT + (7 if is_hover else 0) - (2 if is_press else 0)
             r_in = R_IN - (2 if is_hover else 0)
 
             path = sector_path(c, r_in, r_out, a0, a1)
-            tint = QColor(45, 35, 75, 230) if is_hover else QColor(20, 18, 30, 180)
+
+            if is_press:
+                tint = QColor(80, 50, 130, 250)
+                rim_alpha = 255
+                highlight = 1.6
+            elif is_hover:
+                tint = QColor(50, 38, 85, 240)
+                rim_alpha = 240
+                highlight = 1.4
+            else:
+                tint = QColor(20, 18, 30, 180)
+                rim_alpha = 140
+                highlight = 0.9
+
             glass.paint_liquid_glass(
-                p, path, tint=tint, rim=True, rainbow_alpha=230 if is_hover else 140, highlight=1.3 if is_hover else 0.9
+                p, path, tint=tint, rim=True, rainbow_alpha=rim_alpha, highlight=highlight
             )
 
-            # Calculate center angle of petal for text placement
+            # Center angle of petal for text
             mid_ang = math.radians((a0 + a1) / 2)
             mid_r = (r_in + r_out) / 2
             tx = c.x() + mid_r * math.cos(mid_ang)
@@ -164,6 +304,6 @@ class RadialDialWidget(QWidget):
             p.save()
             p.setPen(QColor(255, 255, 255) if is_hover else QColor(220, 220, 230))
             p.setFont(QFont("-apple-system, Segoe UI", 9, QFont.Bold if is_hover else QFont.Normal))
-            rect = QRectF(tx - 35, ty - 18, 70, 36)
+            rect = QRectF(tx - 38, ty - 20, 76, 40)
             p.drawText(rect, Qt.AlignCenter, f"{act.glyph}\n{act.label}")
             p.restore()

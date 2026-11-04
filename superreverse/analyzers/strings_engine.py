@@ -27,6 +27,14 @@ class StringIntelligence:
     common_tokens: List[str] = field(default_factory=list)
     raw_sample: List[str] = field(default_factory=list)
 
+    @property
+    def ip_addresses(self) -> List[str]:
+        return self.ips
+
+    @property
+    def file_paths(self) -> List[str]:
+        return self.paths
+
 
 def calculate_entropy(data: bytes) -> float:
     """Calculate Shannon entropy of a byte sequence (0.0 - 8.0)."""

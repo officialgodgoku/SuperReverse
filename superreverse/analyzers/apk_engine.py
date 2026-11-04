@@ -1,11 +1,13 @@
 """Android APK & AAB Reverse Engineering Engine.
 
-Provides deep static inspection of Android applications:
-- AndroidManifest.xml binary AXML decoder & components extraction
-- DEX classes, methods, and framework fingerprinting (Flutter, React Native, Unity)
+Deep binary and bytecode-level inspection:
+- AndroidManifest binary AXML decoder & components extraction
+- DEX string constants, classes, and method signatures
+- Embedded resources parsing (strings.xml, colors.xml)
+- Complete Tweakable Parameter Matrix extraction (SDKs, deep links, storage keys, endpoints)
 - Native .so libraries and ABI inventory
 - Signature and certificate verification
-- Security posture & vulnerability flags (debuggable, allowBackup, cleartext, exported components)
+- Security posture & vulnerability flags
 - Auto-generated Frida dynamic hooking scripts (SSL unpinning, root bypass, JNI monitoring)
 - External JADX & APKTool automation bridge
 """
@@ -22,15 +24,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
-# AXML Chunk Types
 CHUNK_AXML_FILE = 0x00080003
 CHUNK_STRING_POOL = 0x001C0001
-CHUNK_RESOURCE_MAP = 0x00080180
-CHUNK_START_NAMESPACE = 0x00100100
-CHUNK_END_NAMESPACE = 0x00100101
 CHUNK_START_TAG = 0x00100102
 CHUNK_END_TAG = 0x00100103
-CHUNK_TEXT = 0x00100104
 
 DANGEROUS_PERMISSIONS = {
     "android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR",
@@ -47,6 +44,60 @@ DANGEROUS_PERMISSIONS = {
     "android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE",
     "android.permission.MANAGE_EXTERNAL_STORAGE", "android.permission.SYSTEM_ALERT_WINDOW"
 }
+
+
+@dataclass
+class APKParameter:
+    name: str
+    category: str
+    value: str
+    location: str
+    tweak_impact: str
+
+
+@dataclass
+class AndroidComponent:
+    kind: str  # activity, service, receiver, provider
+    name: str
+    exported: bool
+    permission: str = ""
+    intent_filters: List[Dict[str, List[str]]] = field(default_factory=list)
+    has_deep_link: bool = False
+    vulnerability_flag: str = ""
+
+
+@dataclass
+class APKAnalysisResult:
+    package_name: str = ""
+    version_code: str = ""
+    version_name: str = ""
+    min_sdk: str = ""
+    target_sdk: str = ""
+    application_class: str = ""
+    debuggable: bool = False
+    allow_backup: bool = True
+    uses_cleartext: bool = False
+    has_network_security_config: bool = False
+    permissions: List[str] = field(default_factory=list)
+    dangerous_permissions: List[str] = field(default_factory=list)
+    components: List[AndroidComponent] = field(default_factory=list)
+    dex_count: int = 0
+    total_classes: int = 0
+    native_abis: List[str] = field(default_factory=list)
+    native_libs: List[str] = field(default_factory=list)
+    detected_frameworks: List[str] = field(default_factory=list)
+    detected_sdks: List[str] = field(default_factory=list)
+    signing_schemes: List[str] = field(default_factory=list)
+    certificate_fingerprint: str = ""
+    vulnerabilities: List[str] = field(default_factory=list)
+    parameters: List[APKParameter] = field(default_factory=list)
+    sqlite_tables: List[str] = field(default_factory=list)
+    shared_prefs_keys: List[str] = field(default_factory=list)
+    endpoints: List[str] = field(default_factory=list)
+    deep_link_schemes: List[str] = field(default_factory=list)
+    frida_script_ssl: str = ""
+    frida_script_root: str = ""
+    frida_script_trace: str = ""
 
 
 class AXMLParser:
@@ -68,7 +119,6 @@ class AXMLParser:
         return val
 
     def parse(self) -> Dict[str, Any]:
-        """Decode AXML into hierarchical dictionary."""
         if len(self.data) < 8:
             return {}
 
@@ -126,7 +176,6 @@ class AXMLParser:
 
             try:
                 if is_utf8:
-                    # Skip length bytes (1 or 2 bytes)
                     b1 = self.data[str_pos]
                     str_pos += 2 if (b1 & 0x80) else 1
                     b2 = self.data[str_pos]
@@ -170,13 +219,13 @@ class AXMLParser:
             attr_name = self.strings[a_name_idx] if 0 <= a_name_idx < len(self.strings) else f"attr_{i}"
             if a_raw_val != 0xFFFFFFFF and 0 <= a_raw_val < len(self.strings):
                 attr_val = self.strings[a_raw_val]
-            elif a_type == 3:  # TYPE_STRING
+            elif a_type == 3:
                 attr_val = self.strings[a_data] if 0 <= a_data < len(self.strings) else str(a_data)
-            elif a_type == 18:  # TYPE_INT_BOOLEAN
+            elif a_type == 18:
                 attr_val = "true" if a_data != 0 else "false"
-            elif a_type == 16:  # TYPE_INT_DEC
+            elif a_type == 16:
                 attr_val = str(a_data)
-            elif a_type == 17:  # TYPE_INT_HEX
+            elif a_type == 17:
                 attr_val = hex(a_data)
             else:
                 attr_val = str(a_data)
@@ -184,46 +233,6 @@ class AXMLParser:
             attributes[attr_name] = attr_val
 
         return {"tag": tag_name, "attributes": attributes, "children": []}
-
-
-@dataclass
-class AndroidComponent:
-    kind: str  # activity, service, receiver, provider
-    name: str
-    exported: bool
-    permission: str = ""
-    intent_filters: List[Dict[str, List[str]]] = field(default_factory=list)
-    has_deep_link: bool = False
-    vulnerability_flag: str = ""
-
-
-@dataclass
-class APKAnalysisResult:
-    package_name: str = ""
-    version_code: str = ""
-    version_name: str = ""
-    min_sdk: str = ""
-    target_sdk: str = ""
-    application_class: str = ""
-    debuggable: bool = False
-    allow_backup: bool = True
-    uses_cleartext: bool = False
-    has_network_security_config: bool = False
-    permissions: List[str] = field(default_factory=list)
-    dangerous_permissions: List[str] = field(default_factory=list)
-    components: List[AndroidComponent] = field(default_factory=list)
-    dex_count: int = 0
-    total_classes: int = 0
-    native_abis: List[str] = field(default_factory=list)
-    native_libs: List[str] = field(default_factory=list)
-    detected_frameworks: List[str] = field(default_factory=list)
-    detected_sdks: List[str] = field(default_factory=list)
-    signing_schemes: List[str] = field(default_factory=list)
-    certificate_fingerprint: str = ""
-    vulnerabilities: List[str] = field(default_factory=list)
-    frida_script_ssl: str = ""
-    frida_script_root: str = ""
-    frida_script_trace: str = ""
 
 
 class APKEngine:
@@ -247,13 +256,14 @@ class APKEngine:
                     manifest_data = zf.read("AndroidManifest.xml")
                     self._parse_manifest(manifest_data, result)
 
-                # 2. DEX Analysis & Framework Detection
+                # 2. DEX Analysis & Bytecode Strings
                 dex_files = [f for f in file_list if f.startswith("classes") and f.endswith(".dex")]
                 result.dex_count = len(dex_files)
 
-                all_classes = self._inspect_dex_classes(zf, dex_files)
+                all_classes, dex_strings = self._inspect_dex_deep(zf, dex_files)
                 result.total_classes = len(all_classes)
                 self._detect_frameworks_and_sdks(all_classes, file_list, result)
+                self._extract_dex_parameters(dex_strings, result)
 
                 # 3. Native Libraries (.so)
                 native_libs: Set[str] = set()
@@ -271,7 +281,6 @@ class APKEngine:
                 sig_files = [f for f in file_list if f.startswith("META-INF/") and f.endswith((".RSA", ".DSA", ".EC"))]
                 if sig_files:
                     result.signing_schemes.append("v1 (JAR Signature)")
-                    # Read cert data
                     try:
                         cert_data = zf.read(sig_files[0])
                         import hashlib
@@ -284,10 +293,7 @@ class APKEngine:
         except Exception as e:
             result.vulnerabilities.append(f"Analysis Warning: {str(e)}")
 
-        # 5. Security Posture Evaluation
         self._evaluate_security(result)
-
-        # 6. Generate Targeted Frida Scripts
         self._generate_frida_scripts(result)
 
         return result
@@ -303,6 +309,12 @@ class APKEngine:
         result.version_code = manifest_attrs.get("versionCode", "")
         result.version_name = manifest_attrs.get("versionName", "")
 
+        result.parameters.extend([
+            APKParameter("PACKAGE_ID", "Application Identity", result.package_name, "AndroidManifest.xml:package", "Defines Android app uniqueness across devices & stores"),
+            APKParameter("VERSION_NAME", "Application Identity", result.version_name, "AndroidManifest.xml:versionName", "User-visible release version string"),
+            APKParameter("VERSION_CODE", "Application Identity", result.version_code, "AndroidManifest.xml:versionCode", "Internal monotonic build revision integer"),
+        ])
+
         for child in root.get("children", []):
             tag = child.get("tag", "")
             attrs = child.get("attributes", {})
@@ -317,6 +329,10 @@ class APKEngine:
             elif tag == "uses-sdk":
                 result.min_sdk = attrs.get("minSdkVersion", "")
                 result.target_sdk = attrs.get("targetSdkVersion", "")
+                result.parameters.extend([
+                    APKParameter("MIN_SDK_VERSION", "OS Compatibility", result.min_sdk, "AndroidManifest.xml:minSdkVersion", "Minimum Android OS API level required (e.g. 24 = Android 7.0)"),
+                    APKParameter("TARGET_SDK_VERSION", "OS Compatibility", result.target_sdk, "AndroidManifest.xml:targetSdkVersion", "Target Android OS behavior and security sandbox level"),
+                ])
 
             elif tag == "application":
                 result.application_class = attrs.get("name", "")
@@ -325,7 +341,14 @@ class APKEngine:
                 result.uses_cleartext = attrs.get("usesCleartextTraffic", "false").lower() == "true"
                 result.has_network_security_config = "networkSecurityConfig" in attrs
 
-                # Components inside application
+                result.parameters.extend([
+                    APKParameter("APPLICATION_CLASS", "Core Architecture", result.application_class or "DefaultApplication", "AndroidManifest.xml:application:name", "Custom Application class executed before any UI component"),
+                    APKParameter("DEBUGGABLE_FLAG", "Security Policy", str(result.debuggable), "AndroidManifest.xml:application:debuggable", "Allows debugger attach and runtime introspection if true"),
+                    APKParameter("ALLOW_BACKUP_FLAG", "Security Policy", str(result.allow_backup), "AndroidManifest.xml:application:allowBackup", "Allows full ADB data backup of databases and private files if true"),
+                    APKParameter("USES_CLEARTEXT_HTTP", "Network Policy", str(result.uses_cleartext), "AndroidManifest.xml:application:usesCleartextTraffic", "Enables unencrypted HTTP network communication if true"),
+                ])
+
+                # Components
                 for comp in child.get("children", []):
                     c_tag = comp.get("tag", "")
                     if c_tag in ("activity", "service", "receiver", "provider", "activity-alias"):
@@ -334,7 +357,6 @@ class APKEngine:
                         is_exported = c_attrs.get("exported", "").lower() == "true"
                         c_perm = c_attrs.get("permission", "")
 
-                        # Intent filters
                         filters: List[Dict[str, List[str]]] = []
                         has_deep_link = False
                         has_intent_filter = False
@@ -354,10 +376,13 @@ class APKEngine:
                                         has_deep_link = True
                                         scheme = e_attrs.get("scheme", "")
                                         host = e_attrs.get("host", "")
-                                        f_info["data"].append(f"{scheme}://{host}" if host else scheme)
+                                        scheme_str = f"{scheme}://{host}" if host else scheme
+                                        f_info["data"].append(scheme_str)
+                                        if scheme_str not in result.deep_link_schemes:
+                                            result.deep_link_schemes.append(scheme_str)
+                                            result.parameters.append(APKParameter(f"DEEP_LINK_SCHEME_{len(result.deep_link_schemes)}", "Navigation & Routing", scheme_str, f"{c_name}:intent-filter", "External URL scheme to launch activity"))
                                 filters.append(f_info)
 
-                        # If exported not explicitly set, Android defaults to true if intent-filter exists
                         if "exported" not in c_attrs and has_intent_filter:
                             is_exported = True
 
@@ -380,9 +405,11 @@ class APKEngine:
                             )
                         )
 
-    def _inspect_dex_classes(self, zf: zipfile.ZipFile, dex_files: List[str]) -> List[str]:
+    def _inspect_dex_deep(self, zf: zipfile.ZipFile, dex_files: List[str]) -> Tuple[List[str], Set[str]]:
         classes: List[str] = []
-        for dex_name in dex_files[:3]:  # inspect first 3 dex files for speed
+        all_strings: Set[str] = set()
+
+        for dex_name in dex_files[:4]:
             try:
                 data = zf.read(dex_name)
                 if len(data) > 0x70 and data[:4] == b"dex\n":
@@ -390,8 +417,24 @@ class APKEngine:
                     type_ids_size, type_ids_off = struct.unpack_from("<II", data, 0x40)
                     class_defs_size, class_defs_off = struct.unpack_from("<II", data, 0x60)
 
-                    # Extract class type descriptors
-                    for i in range(min(class_defs_size, 2500)):
+                    # Extract string pool
+                    for i in range(min(string_ids_size, 15000)):
+                        str_off = struct.unpack_from("<I", data, string_ids_off + i * 4)[0]
+                        if str_off < len(data):
+                            pos = str_off
+                            while pos < len(data) and (data[pos] & 0x80):
+                                pos += 1
+                            pos += 1
+                            end = data.find(b"\x00", pos)
+                            if end != -1:
+                                try:
+                                    s_val = data[pos:end].decode("utf-8", errors="ignore")
+                                    all_strings.add(s_val)
+                                except Exception:
+                                    pass
+
+                    # Extract class definitions
+                    for i in range(min(class_defs_size, 3000)):
                         offset = class_defs_off + i * 32
                         class_idx = struct.unpack_from("<I", data, offset)[0]
                         if class_idx < type_ids_size:
@@ -399,7 +442,6 @@ class APKEngine:
                             str_idx = struct.unpack_from("<I", data, type_off)[0]
                             if str_idx < string_ids_size:
                                 s_offset = struct.unpack_from("<I", data, string_ids_off + str_idx * 4)[0]
-                                # parse MUTF-8 string length
                                 pos = s_offset
                                 while pos < len(data) and (data[pos] & 0x80):
                                     pos += 1
@@ -410,13 +452,37 @@ class APKEngine:
                                     classes.append(raw_str[1:-1].replace("/", "."))
             except Exception:
                 pass
-        return classes
+
+        return classes, all_strings
+
+    def _extract_dex_parameters(self, strings: Set[str], result: APKAnalysisResult) -> None:
+        url_pattern = re.compile(r"^https?://[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}(?::\d+)?(?:/[^\s]*)?$")
+        sql_pattern = re.compile(r"^CREATE\s+TABLE\s+([a-zA-Z0-9_]+)", re.IGNORECASE)
+
+        for s in strings:
+            if url_pattern.match(s) and not any(ign in s for ign in ("schemas.android.com", "w3.org", "plus.google.com")):
+                result.endpoints.append(s)
+                result.parameters.append(APKParameter(f"API_ENDPOINT_{len(result.endpoints)}", "Network & API", s, "classes.dex:StringPool", "Remote API service endpoint URL"))
+
+            sql_match = sql_pattern.match(s)
+            if sql_match:
+                table_name = sql_match.group(1)
+                result.sqlite_tables.append(table_name)
+                result.parameters.append(APKParameter(f"DB_TABLE_{table_name.upper()}", "Local Persistence", table_name, "classes.dex:SQLiteOpenHelper", "Database table entity for caching & local storage"))
+
+            if s.startswith("pref_") or s.endswith("_preferences") or s.startswith("key_"):
+                if len(s) < 40:
+                    result.shared_prefs_keys.append(s)
+                    result.parameters.append(APKParameter(f"PREF_KEY_{s.upper()}", "State & Settings", s, "classes.dex:SharedPreferences", "Key identifier in persistent shared preferences"))
+
+        result.endpoints = sorted(set(result.endpoints))[:25]
+        result.sqlite_tables = sorted(set(result.sqlite_tables))[:15]
+        result.shared_prefs_keys = sorted(set(result.shared_prefs_keys))[:20]
 
     def _detect_frameworks_and_sdks(self, classes: List[str], file_list: List[str], result: APKAnalysisResult) -> None:
         frameworks = set()
         sdks = set()
 
-        # Check native libs & files
         files_str = " ".join(file_list).lower()
         if "libflutter.so" in files_str or "flutter_assets" in files_str:
             frameworks.add("Flutter")
@@ -431,7 +497,6 @@ class APKEngine:
         if "assets/www/index.html" in files_str or "cordova.js" in files_str:
             frameworks.add("Apache Cordova / Ionic")
 
-        # Class fingerprinting
         for c in classes:
             if c.startswith("io.flutter."):
                 frameworks.add("Flutter")
@@ -474,12 +539,10 @@ class APKEngine:
     def _generate_frida_scripts(self, result: APKAnalysisResult) -> None:
         pkg = result.package_name or "com.target.app"
 
-        # Universal SSL Pinning Bypass
         result.frida_script_ssl = f"""// Universal SSL Pinning Bypass for {pkg}
 Java.perform(function() {{
     console.log("[*] Injected SSL Unpinning into {pkg}");
 
-    // 1. TrustManager bypass
     var X509TrustManager = Java.use('javax.net.ssl.X509TrustManager');
     var SSLContext = Java.use('javax.net.ssl.SSLContext');
     var TrustManager = Java.registerClass({{
@@ -498,7 +561,6 @@ Java.perform(function() {{
         SSLContext_init.call(this, km, TrustManagers, sr);
     }};
 
-    // 2. OkHttp3 CertificatePinner bypass
     try {{
         var CertificatePinner = Java.use('okhttp3.CertificatePinner');
         CertificatePinner.check.overload('java.lang.String', 'java.util.List').implementation = function(hostname, peerCertificates) {{
@@ -509,7 +571,6 @@ Java.perform(function() {{
 }});
 """
 
-        # Universal Root Detection Bypass
         result.frida_script_root = f"""// Universal Root & Anti-Tamper Bypass for {pkg}
 Java.perform(function() {{
     console.log("[*] Root & Integrity Check Bypass Active for {pkg}");
@@ -536,7 +597,6 @@ Java.perform(function() {{
 }});
 """
 
-        # Component Lifecycle & IPC Tracer
         result.frida_script_trace = f"""// Activity & Intent Tracer for {pkg}
 Java.perform(function() {{
     var Activity = Java.use('android.app.Activity');

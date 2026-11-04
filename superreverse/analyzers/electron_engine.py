@@ -3,7 +3,7 @@
 Deep static inspection of Electron ASAR archives and JavaScript bundles:
 - Pure-Python ASAR archive unpacking & virtual file system indexer
 - package.json metadata: name, version, main script, dependencies
-- Electron Security Audit: nodeIntegration, contextIsolation, enableRemoteModule, sandbox
+- Complete Tweakable Parameter Matrix extraction (IPC channels, webPreferences, scripts)
 - Complete IPC Communication Map: (ipcMain.on, ipcMain.handle, ipcRenderer.send, ipcRenderer.invoke)
 - Frontend framework fingerprinting: React, Vue, Angular, Svelte, Next, Vite
 - Main process, preload scripts, and renderer bundle classification
@@ -16,6 +16,15 @@ import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+
+@dataclass
+class ElectronParameter:
+    name: str
+    category: str
+    value: str
+    location: str
+    tweak_impact: str
 
 
 @dataclass
@@ -47,6 +56,7 @@ class ElectronAnalysisResult:
     preload_scripts: List[str] = field(default_factory=list)
     ipc_channels: List[ElectronIPCChannel] = field(default_factory=list)
     security: ElectronSecurityAudit = field(default_factory=ElectronSecurityAudit)
+    parameters: List[ElectronParameter] = field(default_factory=list)
     api_endpoints: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
@@ -76,7 +86,6 @@ class ASARReader:
         return self.header
 
     def extract_file(self, relative_path: str) -> Optional[bytes]:
-        """Extract a single file from ASAR using header offset and size."""
         parts = relative_path.replace("\\", "/").strip("/").split("/")
         curr = self.header.get("files", {})
 
@@ -114,14 +123,28 @@ class ASARReader:
             recurse(self.header["files"], "")
         return results
 
+    def unpack_all_to_dir(self, dest_dir: Path | str) -> int:
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        files = self.list_all_files()
+        count = 0
+        for f in files:
+            data = self.extract_file(f)
+            if data is not None:
+                target_p = dest / f
+                target_p.parent.mkdir(parents=True, exist_ok=True)
+                with open(target_p, "wb") as out:
+                    out.write(data)
+                count += 1
+        return count
+
 
 class ElectronEngine:
-    """Reverse engineering engine for Electron ASAR and JavaScript applications."""
-
     IPC_MAIN_ON_RE = re.compile(r"ipcMain\.on\(\s*['\"`]([^'\"`]+)['\"`]")
     IPC_MAIN_HANDLE_RE = re.compile(r"ipcMain\.handle\(\s*['\"`]([^'\"`]+)['\"`]")
     IPC_REND_SEND_RE = re.compile(r"ipcRenderer\.send\(\s*['\"`]([^'\"`]+)['\"`]")
     IPC_REND_INVOKE_RE = re.compile(r"ipcRenderer\.invoke\(\s*['\"`]([^'\"`]+)['\"`]")
+    URL_RE = re.compile(r"https?://[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}(?::\d+)?(?:/[^\s\"'<>]*)?")
 
     def __init__(self, target_path: Path | str):
         self.target_path = Path(target_path)
@@ -158,10 +181,15 @@ class ElectronEngine:
                 result.app_version = pkg.get("version", "")
                 result.main_entry = pkg.get("main", "")
                 result.dependencies = pkg.get("dependencies", {})
+
+                result.parameters.extend([
+                    ElectronParameter("APP_NAME", "Application Identity", result.app_name, "package.json:name", "Application identifier package name"),
+                    ElectronParameter("APP_VERSION", "Application Identity", result.app_version, "package.json:version", "Release version string"),
+                    ElectronParameter("MAIN_ENTRY_SCRIPT", "Core Architecture", result.main_entry, "package.json:main", "Primary entry point script executed in Node main process"),
+                ])
             except Exception:
                 pass
 
-        # Identify frameworks from files and dependencies
         deps_str = " ".join(result.dependencies.keys()).lower()
         files_str = " ".join(result.all_files).lower()
         frameworks = set()
@@ -177,11 +205,11 @@ class ElectronEngine:
             frameworks.add("Electron Packager")
         result.frontend_frameworks = sorted(frameworks)
 
-        # Inspect JS files for IPC, Security, Preload
         for fpath in result.all_files:
             lower = fpath.lower()
             if "preload" in lower:
                 result.preload_scripts.append(fpath)
+                result.parameters.append(ElectronParameter(f"PRELOAD_SCRIPT_{len(result.preload_scripts)}", "Security & IPC", fpath, "webPreferences:preload", "Context bridge script providing secure IPC APIs to DOM"))
 
             if lower.endswith((".js", ".cjs", ".mjs", ".html")):
                 content_bytes = reader.extract_file(fpath)
@@ -219,17 +247,26 @@ class ElectronEngine:
         self._audit_security(result)
 
     def _inspect_js_code(self, filename: str, code: str, result: ElectronAnalysisResult) -> None:
-        # IPC channels
         for m in self.IPC_MAIN_ON_RE.finditer(code):
-            result.ipc_channels.append(ElectronIPCChannel(channel_name=m.group(1), direction="ipcMain.on (Event Listener)", source_file=filename))
+            ch = m.group(1)
+            result.ipc_channels.append(ElectronIPCChannel(channel_name=ch, direction="ipcMain.on (Event Listener)", source_file=filename))
+            result.parameters.append(ElectronParameter(f"IPC_ON_{ch.upper()}", "Inter-Process Communication", ch, f"{filename}:ipcMain.on", "One-way event channel from renderer to main process"))
+
         for m in self.IPC_MAIN_HANDLE_RE.finditer(code):
-            result.ipc_channels.append(ElectronIPCChannel(channel_name=m.group(1), direction="ipcMain.handle (Async RPC)", source_file=filename))
+            ch = m.group(1)
+            result.ipc_channels.append(ElectronIPCChannel(channel_name=ch, direction="ipcMain.handle (Async RPC)", source_file=filename))
+            result.parameters.append(ElectronParameter(f"IPC_HANDLE_{ch.upper()}", "Inter-Process Communication", ch, f"{filename}:ipcMain.handle", "Two-way RPC query/response channel"))
+
         for m in self.IPC_REND_SEND_RE.finditer(code):
             result.ipc_channels.append(ElectronIPCChannel(channel_name=m.group(1), direction="ipcRenderer.send (Trigger)", source_file=filename))
+
         for m in self.IPC_REND_INVOKE_RE.finditer(code):
             result.ipc_channels.append(ElectronIPCChannel(channel_name=m.group(1), direction="ipcRenderer.invoke (Query)", source_file=filename))
 
-        # Security checks
+        for u in self.URL_RE.findall(code):
+            if not any(ign in u for ign in ("github.com", "npmjs.org", "w3.org")):
+                result.api_endpoints.append(u)
+
         if "nodeIntegration: true" in code or "nodeIntegration:!0" in code:
             result.security.node_integration = True
         elif "nodeIntegration: false" in code or "nodeIntegration:!1" in code:
@@ -250,6 +287,11 @@ class ElectronEngine:
 
     def _audit_security(self, result: ElectronAnalysisResult) -> None:
         sec = result.security
+        if sec.node_integration is not None:
+            result.parameters.append(ElectronParameter("NODE_INTEGRATION", "Sandbox Security", str(sec.node_integration), "webPreferences:nodeIntegration", "Renderer access to Node.js APIs (CRITICAL RCE risk if true)"))
+        if sec.context_isolation is not None:
+            result.parameters.append(ElectronParameter("CONTEXT_ISOLATION", "Sandbox Security", str(sec.context_isolation), "webPreferences:contextIsolation", "Isolation between preload scripts and webpage DOM"))
+
         if sec.node_integration is True:
             sec.vulnerabilities.append("CRITICAL: nodeIntegration is ENABLED in renderer. Any XSS immediately results in full remote code execution (RCE) on host OS.")
         if sec.context_isolation is False:
@@ -259,7 +301,7 @@ class ElectronEngine:
         if sec.web_security is False:
             sec.vulnerabilities.append("HIGH RISK: webSecurity is DISABLED. Same-Origin Policy (SOP) bypass enabled.")
 
-        # Deduplicate IPC channels
+        # Deduplicate
         seen = set()
         deduped = []
         for ch in result.ipc_channels:
@@ -268,3 +310,4 @@ class ElectronEngine:
                 seen.add(key)
                 deduped.append(ch)
         result.ipc_channels = deduped
+        result.api_endpoints = sorted(set(result.api_endpoints))[:25]
